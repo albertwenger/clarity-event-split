@@ -69,4 +69,4 @@
     ;; Mutations:
     ;; - transfer-stx from contract to tx-sender
     ;; - update nft.refunded-at
-    (ok true)) 
+    (ok true))
