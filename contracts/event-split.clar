@@ -31,14 +31,22 @@
 
 ;; close-event-fundraise
 (define-public (close-event-fundraise (event-id (buff 64)))
-    (let ((event (map-get? events ((event-id event-id)))))
-         (if (is-none event) (err "event does not exist")
-             (if (< block-height event.expires-at) (err "too soon")
-                 (if (> event.exercised-at (to-uint 0)) (err "already exercised")
-                     (if (< event.current-amount event.total-amount) (err "not enough money yet")
-                         (begin (as-contract (stx-transfer? event.current-amount tx-sender event.recipient))
-                                ((map-set events ((event-id event-id)) ((exercised-at block-height)))
-                                (ok true))))))))
+    (let ((event (unwrap! (map-get? events ((event-id event-id))) 
+                          (err "event does not exist"))))
+        (asserts! (< (get expires-at event) block-height) (err "too soon"))
+        (asserts! (> (get exercised-at event) u0) (err "already exercised"))
+        (asserts! (< (get current-amount event) (get total-amount event)) (err "not enough money yet"))
+        (unwrap! 
+            (stx-transfer? (get current-amount event) (as-contract tx-sender) (get recipient event))
+            (err "unable to transfer stx"))
+        (map-set events ((event-id event-id)) {
+            total-amount: (get total-amount event),
+            expires-at: (get expires-at event),
+            recipient: (get recipient event),
+            exercised-at: block-height,
+            current-amount: u0
+        })
+        (ok true)))
 
 ;; buy-event-pass
 (define-public (buy-event-pass (event-id uint) (amount uint)) 
