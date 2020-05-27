@@ -86,30 +86,30 @@
 
 ;; refund-event-pass
 (define-public (refund-event-pass (event-pass-id uint))
-    (let ((event-pass (unwrap! (map-get? event-passes ((event-pass-id event-pass-id))) 
+    (let ((pass (unwrap! (map-get? event-passes ((event-pass-id event-pass-id))) 
                                (err "event pass not found")))
            (pass-owner (unwrap! (nft-get-owner? event-pass event-pass-id) 
                                 (err "pass owner not found"))))
         (asserts! (is-eq tx-sender pass-owner) (err "not your pass"))
-        (let ((event (unwrap! (map-get? events ((event-id (get event-id event-pass)))) 
+        (let ((event (unwrap! (map-get? events ((event-id (get event-id pass)))) 
                                (err "event not found"))))
-            (asserts! (> (get funded-at event) 0) 
+            (asserts! (> (get funded-at event) u0) 
                       (err "pass is not refundable because the event funded"))
-            (asserts! (< (get current-amount event) (get amount event-pass))
+            (asserts! (< (get current-amount event) (get amount-spent pass))
                       (err "insufficient funds to issue refund"))
             (unwrap!
-                (stx-transfer? (get amount event-pass) (as-contract tx-sender) pass-owner)
+                (stx-transfer? (get amount-spent pass) (as-contract tx-sender) pass-owner)
                 (err "could not transfer refund"))
             (map-set event-passes ((event-pass-id event-pass-id)) {
-                event-id: (get event-id event-pass),
-                amount: (get amount event-pass),
+                event-id: (get event-id pass),
+                amount-spent: (get amount-spent pass),
                 refunded: true
             })
-            (map-set events ((event-id (get event-id event-pass))) {
+            (map-set events ((event-id (get event-id pass))) {
                 total-amount: (get total-amount event),
                 expires-at: (get expires-at event),
                 recipient: (get recipient event),
                 funded-at: (get funded-at event),
-                current-amount: (- (get current-amount event) (get amount event-pass))
+                current-amount: (- (get current-amount event) (get amount-spent pass))
             }))
         (ok true)))
