@@ -8,14 +8,17 @@
      (current-amount uint)))                ;; Keeping track - how much did we receive so far (initially 0)
 
 ;; issued when someone pays -- can get refunded if event is not fully funded
-(define-non-fungible-token event-pass (buff 128))
+(define-non-fungible-token event-pass uint)
+
+;; event pass counter
+(define-data-var pass-counter uint u0)
 
 ;; all the event passes
 (define-map event-passes 
-    ((event-pass-id (buff 128)))            ;; ID of the NFT
+    ((event-pass-id uint))                  ;; ID of the NFT
     ((event-id (buff 64))                   ;; ID of the event
      (amount-spent uint)                    ;; Amount spent by the participant
-     (refunded boolean)))                   ;; True if pass has been refunded
+     (refunded bool)))                   ;; True if pass has been refunded
 
 ;; create-event
 (define-public (create-event (event-id (buff 64))
@@ -37,10 +40,10 @@
 ;; close-event-fundraise
 (define-public (close-event-fundraise (event-id (buff 64)))
     (let ((event (unwrap! (map-get? events ((event-id event-id))) 
-                          (err "event does not exist"))))
-        (asserts! (< (get expires-at event) block-height) (err "too soon"))
+                          (err "event not found"))))
+        (asserts! (< (get expires-at event) block-height) (err "event still funding"))
         (asserts! (> (get funded-at event) u0) (err "event already funded"))
-        (asserts! (< (get current-amount event) (get total-amount event)) (err "not enough money yet"))
+        (asserts! (< (get current-amount event) (get total-amount event)) (err "event insufficiently funded"))
         (unwrap! 
             (stx-transfer? (get current-amount event) (as-contract tx-sender) (get recipient event))
             (err "unable to transfer stx"))
@@ -56,12 +59,12 @@
 ;; buy-event-pass
 (define-public (buy-event-pass (event-id (buff 64)) (amount uint))
     (let ((event (unwrap! (map-get? events ((event-id event-id))) 
-                          (err "event does not exist")))
-          (event-pass-id (concat event-id (concat "-" tx-sender))))  ;; can I create an event-pass-id this way?
+                          (err "event not found")))
+           (event-pass-id (var-get pass-counter)))
         (asserts! (> (get funded-at event) u0) (err "event already funded"))
-        (asserts! (> (stx-get-balance tx-sender) amount) (err "you have insufficient funds")) 
+        (asserts! (> (stx-get-balance tx-sender) amount) (err "insufficient funds")) 
         (unwrap!
-            (stx-transfer? amount tx-sender (as-contract tx-sender))   ;; is that how I transfer stacks to the contract?
+            (stx-transfer? amount tx-sender (as-contract tx-sender))
             (err "unable to receive stx"))
         (map-insert event-passes ((event-pass-id event-pass-id)) {
             event-id: event-id,
@@ -76,18 +79,37 @@
             current-amount: (+ (get current-amount event) amount)
         })
         (unwrap! 
-            ((nft-mint? event-pass event-pass-id tx-sender)) 
+            (nft-mint? event-pass event-pass-id tx-sender) 
             (err "unable to issue event pass"))
+        (var-set pass-counter (+ event-pass-id u1))
         (ok true)))
 
 ;; refund-event-pass
 (define-public (refund-event-pass (event-pass-id uint))
-    ;; Checks:
-    ;; - ensure that caller is the owner of the pass
-    ;; - ensure that event-id (from the nft-metadata) map to an event that is refundable
-    ;; - ensure that current block > event.expiration-date
-    ;; - ensure that pot.amount < upper-bound
-    ;; Mutations:
-    ;; - transfer-stx from contract to tx-sender
-    ;; - update nft.refunded-at
-    (ok true))
+    (let ((event-pass (unwrap! (map-get? event-passes ((event-pass-id event-pass-id))) 
+                               (err "event pass not found")))
+           (pass-owner (unwrap! (nft-get-owner? event-pass event-pass-id) 
+                                (err "pass owner not found"))))
+        (asserts! (is-eq tx-sender pass-owner) (err "not your pass"))
+        (let ((event (unwrap! (map-get? events ((event-id (get event-id event-pass)))) 
+                               (err "event not found"))))
+            (asserts! (> (get funded-at event) 0) 
+                      (err "pass is not refundable because the event funded"))
+            (asserts! (< (get current-amount event) (get amount event-pass))
+                      (err "insufficient funds to issue refund"))
+            (unwrap!
+                (stx-transfer? (get amount event-pass) (as-contract tx-sender) pass-owner)
+                (err "could not transfer refund"))
+            (map-set event-passes ((event-pass-id event-pass-id)) {
+                event-id: (get event-id event-pass),
+                amount: (get amount event-pass),
+                refunded: true
+            })
+            (map-set events ((event-id (get event-id event-pass))) {
+                total-amount: (get total-amount event),
+                expires-at: (get expires-at event),
+                recipient: (get recipient event),
+                funded-at: (get funded-at event),
+                current-amount: (- (get current-amount event) (get amount event-pass))
+            }))
+        (ok true)))
